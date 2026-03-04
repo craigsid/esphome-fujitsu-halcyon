@@ -149,6 +149,7 @@ void Controller::uart_write_bytes(const uint8_t *buf, size_t length) {
 }
 
 void Controller::set_initialization_stage(const InitializationStageEnum stage) {
+    ESP_LOGD(TAG, "set_initialization_state(%d)", stage);
     this->initialization_stage = stage;
     if (this->callbacks.InitializationStage)
         callbacks.InitializationStage(stage);
