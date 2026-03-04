@@ -238,9 +238,7 @@ void Controller::process_packet(const Packet::Buffer& buffer, bool lastPacketOnW
         }
 
         tx_packet.TokenDestinationType = this->next_token_destination_type;
-	// Hard coded to indoor unit 1 ? let's try 0
-        // tx_packet.TokenDestinationAddress = this->next_token_destination_type == AddressTypeEnum::Controller ? this->controller_address + 1 : 1;
-        tx_packet.TokenDestinationAddress = this->next_token_destination_type == AddressTypeEnum::Controller ? this->controller_address + 1 : 0;
+        tx_packet.TokenDestinationAddress = this->next_token_destination_type == AddressTypeEnum::Controller ? this->controller_address + 1 : 1;
 
         if (this->initialization_stage == InitializationStageEnum::FeatureRequest)
             tx_packet.Type = PacketTypeEnum::Features;

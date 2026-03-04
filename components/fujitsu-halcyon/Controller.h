@@ -22,10 +22,14 @@ constexpr uart_config_t UARTConfig = {
         .source_clk = UART_SCLK_DEFAULT,
 };
 
-constexpr uint8_t UARTInterPacketSymbolSpacing = 2;
+// We'll try a larger inter packet gap
+// constexpr uint8_t UARTInterPacketSymbolSpacing = 2;
+constexpr uint8_t UARTInterPacketSymbolSpacing = 4;
 
 // Temperatures are in Celcius
-constexpr uint8_t MinSetpoint = 16;
+// min set point should be 18
+// constexpr uint8_t MinSetpoint = 16;
+constexpr uint8_t MinSetpoint = 18;
 constexpr uint8_t MaxSetpoint = 30;
 constexpr float MinTemperature = 0.0;
 constexpr float MaxTemperature = 60.0;
