@@ -20,6 +20,8 @@ bool Controller::start() {
     constexpr uint32_t stack_depth = 4096; // ?
     constexpr UBaseType_t task_priority = 12; // ?
 
+    ESP_LOGD(TAG, "Controller::start init_stage(%d)", this->initialization_stage);
+
     // User should have called uart_set_pin before this point if necessary
 
     if (this->uart_event_queue == nullptr && uart_is_driver_installed(this->uart_num)) {
@@ -158,6 +160,9 @@ void Controller::set_initialization_stage(const InitializationStageEnum stage) {
 void Controller::process_packet(const Packet::Buffer& buffer, bool lastPacketOnWire) {
     bool error_flag_changed = false;
     std::function<void()> deferred_callback;
+
+    ESP_LOGD(TAG, "Controller::process_packet: lastPacketOnWire(%d)", 
+        lastPacketOnWire);
 
     // Parse buffer
     Packet packet(buffer);
