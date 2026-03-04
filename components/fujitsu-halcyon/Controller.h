@@ -92,7 +92,7 @@ class Controller {
     using ControllerConfigCallback = std::function<void(const uint8_t address, const Config&)>;
     using InitializationStageCallback = std::function<void(const InitializationStageEnum stage)>;
     using ReadBytesCallback  = std::function<void(int state, uint8_t *data, size_t len)>;
-    using WriteBytesCallback = std::function<void(const state, const uint8_t *data, size_t len)>;
+    using WriteBytesCallback = std::function<void(const int state, const uint8_t *data, size_t len)>;
 
     struct Callbacks {
         ConfigCallback Config;
