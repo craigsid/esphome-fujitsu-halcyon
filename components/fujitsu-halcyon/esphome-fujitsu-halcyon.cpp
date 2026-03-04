@@ -23,13 +23,13 @@ void FujitsuHalcyonController::setup() {
             .InitializationStage = [this](const fujitsu_general::airstage::h::InitializationStageEnum stage){
                 this->initialization_sensor->publish_state(str_sprintf("(%d/%d)", stage, fujitsu_general::airstage::h::InitializationStageEnum::Complete));
             },
-            .ReadBytes  = [this](uint8_t *buf, size_t length){
+            .ReadBytes  = [this](int state, uint8_t *buf, size_t length){
                 this->read_array(buf, length);
-                this->log_buffer("RX", buf, length);
+                this->log_buffer("RX", state, this->buf, length);
             },
-            .WriteBytes = [this](const uint8_t *buf, size_t length){
+            .WriteBytes = [this](const int state, const uint8_t *buf, size_t length){
                 this->write_array(buf, length);
-                this->log_buffer("TX", buf, length);
+                this->log_buffer("TX", state, buf, length);
             }
         },
         *static_cast<uart::IDFUARTComponent*>(this->parent_)->get_uart_event_queue()
@@ -98,7 +98,7 @@ void FujitsuHalcyonController::setup() {
 */
 }
 
-void FujitsuHalcyonController::log_buffer(const char* dir, const uint8_t* buf, size_t length) {
+void FujitsuHalcyonController::log_buffer(const char* dir, const int state, const uint8_t* buf, size_t length) {
     auto tbuf = std::vector<uint8_t>(buf, buf + length);
     for (auto &b : tbuf)
         b ^= 0xFF;
@@ -107,7 +107,7 @@ void FujitsuHalcyonController::log_buffer(const char* dir, const uint8_t* buf, s
     this->tzsp_send(tbuf);
 #endif
 
-    ESP_LOGD(TAG, "%s: %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX", dir, tbuf[0], tbuf[1], tbuf[2], tbuf[3], tbuf[4], tbuf[5], tbuf[6], tbuf[7]);
+    ESP_LOGD(TAG, "%s: %d: %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX", dir, state, tbuf[0], tbuf[1], tbuf[2], tbuf[3], tbuf[4], tbuf[5], tbuf[6], tbuf[7]);
 }
 
 void FujitsuHalcyonController::dump_config() {

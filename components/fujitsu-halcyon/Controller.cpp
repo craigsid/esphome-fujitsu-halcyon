@@ -138,14 +138,14 @@ void Controller::uart_event_task() {
 
 void Controller::uart_read_bytes(uint8_t *buf, size_t length) {
     if (this->callbacks.ReadBytes)
-        callbacks.ReadBytes(buf, length);
+        callbacks.ReadBytes(this->initialization_stage, buf, length);
     else
         ::uart_read_bytes(this->uart_num, buf, length, portMAX_DELAY);
 }
 
 void Controller::uart_write_bytes(const uint8_t *buf, size_t length) {
     if (this->callbacks.WriteBytes)
-        callbacks.WriteBytes(buf, length);
+        callbacks.WriteBytes(this->initialization_stage, buf, length);
     else
         ::uart_write_bytes(this->uart_num, buf, length);
 }
