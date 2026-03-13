@@ -33,6 +33,9 @@ class FujitsuHalcyonController : public Component, public climate::Climate, publ
         binary_sensor::BinarySensor* connected_sensor = new binary_sensor::BinarySensor();
         text_sensor::TextSensor* error_code_sensor = new text_sensor::TextSensor();
         text_sensor::TextSensor* initialization_sensor = new text_sensor::TextSensor();
+        text_sensor::TextSensor* rx_stats_sensor = new text_sensor::TextSensor();
+        text_sensor::TextSensor* to_me_stats_sensor = new text_sensor::TextSensor();
+        text_sensor::TextSensor* tx_stats_sensor = new text_sensor::TextSensor();
         sensor::Sensor* remote_sensor = new sensor::Sensor();
 
         custom::CustomButton* reinitialize_button = new custom::CustomButton([this]() { this->controller->reinitialize(); });
@@ -66,6 +69,9 @@ class FujitsuHalcyonController : public Component, public climate::Climate, publ
         climate::ClimateTraits traits() override;
 
         void set_ignore_lock(bool ignore_lock) { this->ignore_lock_ = ignore_lock; }
+        void set_transmit(bool transmit) { this->transmit_ = transmit; }
+        void set_tx_delay(uint8_t tx_delay) { this->tx_delay_ = tx_delay; }
+        void set_tx_test(bool tx_test) { this->tx_test_ = tx_test; }
         void set_humidity_sensor(sensor::Sensor* humidity_sensor) { this->humidity_sensor_ = humidity_sensor; }
         void set_temperature_sensor(sensor::Sensor* temperature_sensor) { this->temperature_sensor_ = temperature_sensor; }
         void set_temperature_controller_address(uint8_t temperature_controller_address) { this->temperature_controller_address_ = temperature_controller_address; }
@@ -74,6 +80,9 @@ class FujitsuHalcyonController : public Component, public climate::Climate, publ
         uint8_t controller_address_{};
         uint8_t temperature_controller_address_{};
         bool ignore_lock_{};
+        bool transmit_{};
+        uint8_t tx_delay_{};
+        bool tx_test_{};
         sensor::Sensor* humidity_sensor_{};
         sensor::Sensor* temperature_sensor_{};
 

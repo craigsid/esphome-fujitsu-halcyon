@@ -15,7 +15,7 @@ constexpr std::array ControllerName = { "Primary", "Secondary", "Undocumented" }
 void FujitsuHalcyonController::setup() {
     this->controller = new fujitsu_general::airstage::h::Controller(
         static_cast<uart::IDFUARTComponent*>(this->parent_)->get_hw_serial_number(),
-        this->controller_address_,
+        this->controller_address_, this->transmit_, this->tx_delay_, this->tx_test_,
         {
             .Config = [this](const fujitsu_general::airstage::h::Config& data){ this->update_from_device(data); },
             .Error  = [this](const fujitsu_general::airstage::h::Packet& data){ this->update_from_device(data); },
@@ -23,6 +23,18 @@ void FujitsuHalcyonController::setup() {
             .ControllerConfig = [this](const uint8_t address, const fujitsu_general::airstage::h::Config& data){ this->update_from_controller(address, data); },
             .InitializationStage = [this](const fujitsu_general::airstage::h::InitializationStageEnum stage){
                 this->on_initialization_stage(stage);
+            },
+            .RxPktStats = [this](const uint16_t total, const uint16_t invalid_type, const uint16_t* stats){
+                this->rx_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d)", total, invalid_type,
+                    stats[0], stats[1], stats[2], stats[3], stats[4]));
+            },
+            .ToMePktStats = [this](const uint16_t total, const uint16_t invalid_type, const uint16_t* stats){
+                this->to_me_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d)", total, invalid_type,
+                    stats[0], stats[1], stats[2], stats[3], stats[4]));
+            },
+            .TxPktStats = [this](const uint16_t total, const uint16_t invalid_type, const uint16_t* stats, const uint32_t tx_delay){
+                this->tx_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d) %lu", total, invalid_type,
+                    stats[0], stats[1], stats[2], stats[3], stats[4], tx_delay));
             },
             .ReadBytes  = [this](uint8_t *buf, size_t length){
                 this->read_array(buf, length);
@@ -171,6 +183,9 @@ void FujitsuHalcyonController::dump_config() {
     LOG_SENSOR("  ", "Humidity Sensor", this->humidity_sensor_);
     ESP_LOGCONFIG(TAG, "  Ignore Lock: %s", this->ignore_lock_ ? "YES" : "NO");
     ESP_LOGCONFIG(TAG, "  Standby Mode: %s", this->standby_sensor->state ? "ACTIVE" : "NORMAL");
+    ESP_LOGCONFIG(TAG, "  Transmit: %s", this->transmit_ ? "YES" : "NO");
+    ESP_LOGCONFIG(TAG, "  Transmit Delay: %dms", this->tx_delay_);
+    ESP_LOGCONFIG(TAG, "  Transmit Test: %s", this->tx_test_ ? "YES" : "NO");
 
     if (this->controller->is_initialized()) {
         auto features = this->controller->get_features();

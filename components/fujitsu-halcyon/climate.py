@@ -53,11 +53,17 @@ CONF_TEMPERATURE_CONTROLLER_ADDRESS = "temperature_controller_address"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor_id"
 CONF_USE_SENSOR = "use_sensor"
 CONF_IGNORE_LOCK = "ignore_lock"
+CONF_TRANSMIT = "transmit"
+CONF_TX_DELAY = "tx_delay"
+CONF_TX_TEST = "tx_test"
 
 CONF_STANDBY_MODE = "standby_mode"
 CONF_ERROR_CODE = "error_code"
 CONF_ERROR_STATE = "error_state"
 CONF_INITIALIZATION_STAGE = "initialization_stage"
+CONF_RX_STATS = "rx_stats"
+CONF_TO_ME_STATS = "to_me_stats"
+CONF_TX_STATS = "tx_stats"
 CONF_REMOTE_SENSOR = "remote_sensor"
 CONF_ADVANCE_VERTICAL_LOUVER = "advance_vertical_louver"
 CONF_ADVANCE_HORIZONTAL_LOUVER = "advance_horizontal_louver"
@@ -88,6 +94,9 @@ CONFIG_SCHEMA = climate.climate_schema(FujitsuHalcyonController).extend(
         cv.Optional(CONF_CONTROLLER_ADDRESS, default=0): cv.int_range(0, 15),
         cv.Optional(CONF_TEMPERATURE_CONTROLLER_ADDRESS, default=0): cv.int_range(0, 15),
         cv.Optional(CONF_IGNORE_LOCK, default=False): cv.boolean,
+        cv.Optional(CONF_TRANSMIT, default=True): cv.boolean,
+        cv.Optional(CONF_TX_DELAY, default=60): cv.int_range(0, 120),
+        cv.Optional(CONF_TX_TEST, default=False): cv.boolean,
         cv.Optional(CONF_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_HUMIDITY_SENSOR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_FUNCTION, default={CONF_NAME: "Function", CONF_MODE: "BOX"}): number.number_schema(
@@ -136,6 +145,18 @@ CONFIG_SCHEMA = climate.climate_schema(FujitsuHalcyonController).extend(
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC
         ),
         cv.Optional(CONF_INITIALIZATION_STAGE, default={CONF_NAME: "Initialization Stage"}): text_sensor.text_sensor_schema(
+            TextSensor,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+        ),
+        cv.Optional(CONF_RX_STATS, default={CONF_NAME: "Rx Stats"}): text_sensor.text_sensor_schema(
+            TextSensor,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+        ),
+        cv.Optional(CONF_TO_ME_STATS, default={CONF_NAME: "To Me Stats"}): text_sensor.text_sensor_schema(
+            TextSensor,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+        ),
+        cv.Optional(CONF_TX_STATS, default={CONF_NAME: "Tx Stats"}): text_sensor.text_sensor_schema(
             TextSensor,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC
         ),
@@ -192,6 +213,9 @@ async def to_code(config: ConfigType) -> None:
 
     cg.add(var.set_temperature_controller_address(config[CONF_TEMPERATURE_CONTROLLER_ADDRESS]))
     cg.add(var.set_ignore_lock(config[CONF_IGNORE_LOCK]))
+    cg.add(var.set_transmit(config[CONF_TRANSMIT]))
+    cg.add(var.set_tx_delay(config[CONF_TX_DELAY]))
+    cg.add(var.set_tx_test(config[CONF_TX_TEST]))
 
     varx = cg.Pvariable(config[CONF_STANDBY_MODE][CONF_ID], var.standby_sensor)
     await binary_sensor.register_binary_sensor(varx, config[CONF_STANDBY_MODE])
@@ -204,6 +228,15 @@ async def to_code(config: ConfigType) -> None:
 
     varx = cg.Pvariable(config[CONF_INITIALIZATION_STAGE][CONF_ID], var.initialization_sensor)
     await text_sensor.register_text_sensor(varx, config[CONF_INITIALIZATION_STAGE])
+
+    varx = cg.Pvariable(config[CONF_RX_STATS][CONF_ID], var.rx_stats_sensor)
+    await text_sensor.register_text_sensor(varx, config[CONF_RX_STATS])
+
+    varx = cg.Pvariable(config[CONF_TO_ME_STATS][CONF_ID], var.to_me_stats_sensor)
+    await text_sensor.register_text_sensor(varx, config[CONF_TO_ME_STATS])
+
+    varx = cg.Pvariable(config[CONF_TX_STATS][CONF_ID], var.tx_stats_sensor)
+    await text_sensor.register_text_sensor(varx, config[CONF_TX_STATS])
 
     varx = cg.Pvariable(config[CONF_USE_SENSOR][CONF_ID], var.use_sensor_switch)
     await switch.register_switch(varx, config[CONF_USE_SENSOR])
