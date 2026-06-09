@@ -1,5 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
+import esphome.final_validate as fv
 
 from esphome.components import (
     binary_sensor,
@@ -26,13 +27,14 @@ from esphome.const import (
     CONF_INTERNAL,
     CONF_MODE,
     CONF_NAME,
+    CONF_UART_ID,
     DEVICE_CLASS_TEMPERATURE,
     DEVICE_CLASS_CONNECTIVITY,
     DEVICE_CLASS_PROBLEM,
     ENTITY_CATEGORY_CONFIG,
     ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
-    UNIT_CELSIUS
+    UNIT_CELSIUS,
 )
 
 from esphome.types import ConfigType
@@ -57,6 +59,26 @@ CONF_TRANSMIT = "transmit"
 CONF_TX_DELAY = "tx_delay"
 CONF_TX_TEST = "tx_test"
 
+# Feature negotiation override options.
+# When the indoor unit responds to a FeatureRequest with a Features packet, the
+# IU's reported feature set is used and these options are ignored. Use these
+# options when (a) the IU does not support feature negotiation (responds with
+# Config instead of Features, or has UnknownFlags == 2), or (b) you want to
+# disable probing entirely with `autoconf: false` for IUs known to misbehave on
+# FeatureRequest. Anything not specified keeps the in-code DefaultFeatures value.
+CONF_AUTOCONF = "autoconf"
+CONF_SUPPORTED_MODES = "supported_modes"
+CONF_SUPPORTED_FAN_MODES = "supported_fan_modes"
+CONF_SUPPORTED_SWING_MODES = "supported_swing_modes"
+CONF_FILTER_TIMER = "filter_timer"
+CONF_SENSOR_SWITCHING = "sensor_switching"
+CONF_MAINTENANCE = "maintenance"
+CONF_ECONOMY_MODE = "economy_mode"
+
+ALLOWED_MODES = {"AUTO", "HEAT", "FAN", "DRY", "COOL"}
+ALLOWED_FAN_MODES = {"QUIET", "LOW", "MEDIUM", "HIGH", "AUTO"}
+ALLOWED_SWING_MODES = {"VERTICAL", "HORIZONTAL", "BOTH"}
+
 CONF_STANDBY_MODE = "standby_mode"
 CONF_ERROR_CODE = "error_code"
 CONF_ERROR_STATE = "error_state"
@@ -71,6 +93,7 @@ CONF_RESET_FILTER_TIMER = "reset_filter_timer"
 CONF_FILTER_TIMER_EXPIRED = "filter_timer_expired"
 CONF_REINITIALIZE = "reinitialize"
 CONF_CONNECTED = "connected"
+CONF_SUPPORTED_FEATURES = "supported_features"
 
 CONF_FUNCTION = "function"
 CONF_FUNCTION_VALUE = "function_value"
@@ -89,6 +112,11 @@ CustomSwitch = custom_ns.class_("CustomSwitch", cg.Component, switch.Switch)
 fujitsu_general_airstage_h_controller_ns = cg.esphome_ns.namespace("fujitsu_general_airstage_h_controller")
 FujitsuHalcyonController = fujitsu_general_airstage_h_controller_ns.class_("FujitsuHalcyonController", cg.Component, climate.Climate, uart.UARTDevice)
 
+PACKET_FRAME_SIZE = 8
+UART_INTER_PACKET_SYMBOL_SPACING = 2
+
+COMPONENT_NAME = __name__.split('.')[-2]
+
 CONFIG_SCHEMA = climate.climate_schema(FujitsuHalcyonController).extend(
     {
         cv.Optional(CONF_CONTROLLER_ADDRESS, default=0): cv.int_range(0, 15),
@@ -99,6 +127,14 @@ CONFIG_SCHEMA = climate.climate_schema(FujitsuHalcyonController).extend(
         cv.Optional(CONF_TX_TEST, default=False): cv.boolean,
         cv.Optional(CONF_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_HUMIDITY_SENSOR): cv.use_id(sensor.Sensor),
+        cv.Optional(CONF_AUTOCONF): cv.boolean,
+        cv.Optional(CONF_SUPPORTED_MODES): cv.ensure_list(cv.one_of(*ALLOWED_MODES, upper=True)),
+        cv.Optional(CONF_SUPPORTED_FAN_MODES): cv.ensure_list(cv.one_of(*ALLOWED_FAN_MODES, upper=True)),
+        cv.Optional(CONF_SUPPORTED_SWING_MODES): cv.ensure_list(cv.one_of(*ALLOWED_SWING_MODES, upper=True)),
+        cv.Optional(CONF_FILTER_TIMER): cv.boolean,
+        cv.Optional(CONF_SENSOR_SWITCHING): cv.boolean,
+        cv.Optional(CONF_MAINTENANCE): cv.boolean,
+        cv.Optional(CONF_ECONOMY_MODE): cv.boolean,
         cv.Optional(CONF_FUNCTION, default={CONF_NAME: "Function", CONF_MODE: "BOX"}): number.number_schema(
             CustomNumber,
             entity_category=ENTITY_CATEGORY_CONFIG
@@ -183,21 +219,67 @@ CONFIG_SCHEMA = climate.climate_schema(FujitsuHalcyonController).extend(
             BinarySensor,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             device_class=DEVICE_CLASS_CONNECTIVITY
-        )
+        ),
+        cv.Optional(CONF_SUPPORTED_FEATURES, default={CONF_NAME: "Supported Features"}): text_sensor.text_sensor_schema(
+            TextSensor,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+        ),
     }
 ).extend(cv.COMPONENT_SCHEMA).extend(uart.UART_DEVICE_SCHEMA)
 
 if TZSP_AVAILABLE:
     CONFIG_SCHEMA = CONFIG_SCHEMA.extend(tzsp.TZSP_SENDER_SCHEMA)
 
-FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
-    "fujitsu_halcyon",
-    require_tx=True,
-    require_rx=True,
-    baud_rate=500,
-    data_bits=8,
-    parity="EVEN",
-    stop_bits=1
+def check_esphome_version(config):
+    if cv.parse_esphome_version() < (2026, 3, 0):
+        raise cv.Invalid(f"Component {COMPONENT_NAME} requires ESPHome 2026.3.0 or newer.")
+
+    return config
+
+def final_validate_uart_schema(config):
+    def validate_rx_full_threshold(value):
+        if not isinstance(value, int) or value < PACKET_FRAME_SIZE * 2:
+            raise cv.Invalid(f"Component {COMPONENT_NAME} requires {uart.CONF_RX_FULL_THRESHOLD} >= {PACKET_FRAME_SIZE * 2}  for the uart referenced by {CONF_UART_ID}")
+        return value
+
+    def validate_rx_timeout(value):
+        if value != UART_INTER_PACKET_SYMBOL_SPACING:
+            raise cv.Invalid(f"Component {COMPONENT_NAME} requires {uart.CONF_RX_TIMEOUT} = {UART_INTER_PACKET_SYMBOL_SPACING} for the uart referenced by {CONF_UART_ID}")
+        return value
+
+    # This should not be done this way; Not sure of the proper way to do it...
+    full_config = fv.full_config.get()
+    uart_path = full_config.get_path_for_id(config[CONF_UART_ID])[:-1]
+    uart_conf = full_config.get_config_for_path(uart_path)
+    if uart.CONF_RX_FULL_THRESHOLD not in uart_conf:
+        uart_conf[uart.CONF_RX_FULL_THRESHOLD] = PACKET_FRAME_SIZE * 2
+
+    cv.Schema(
+        {
+            cv.Required(CONF_UART_ID): fv.id_declaration_match_schema(
+                {
+                    cv.Optional(uart.CONF_RX_FULL_THRESHOLD, default=PACKET_FRAME_SIZE * 2): validate_rx_full_threshold,
+                    cv.Optional(uart.CONF_RX_TIMEOUT, default=UART_INTER_PACKET_SYMBOL_SPACING): validate_rx_timeout,
+                },
+            ),
+        },
+        extra=cv.ALLOW_EXTRA,
+    )(config)
+
+    return config
+
+FINAL_VALIDATE_SCHEMA = cv.All(
+    check_esphome_version,
+    final_validate_uart_schema,
+    uart.final_validate_device_schema(
+        COMPONENT_NAME,
+        require_tx=True,
+        require_rx=True,
+        baud_rate=500,
+        data_bits=8,
+        parity="EVEN",
+        stop_bits=1,
+    ),
 )
 
 async def to_code(config: ConfigType) -> None:
@@ -209,13 +291,40 @@ async def to_code(config: ConfigType) -> None:
         await tzsp.register_tzsp_sender(var, config)
         cg.add_define("USE_TZSP")
 
-    uart.request_wake_loop_on_rx()
-
     cg.add(var.set_temperature_controller_address(config[CONF_TEMPERATURE_CONTROLLER_ADDRESS]))
     cg.add(var.set_ignore_lock(config[CONF_IGNORE_LOCK]))
     cg.add(var.set_transmit(config[CONF_TRANSMIT]))
     cg.add(var.set_tx_delay(config[CONF_TX_DELAY]))
     cg.add(var.set_tx_test(config[CONF_TX_TEST]))
+
+    # Apply feature negotiation overrides. Anything omitted from YAML keeps the
+    # in-code DefaultFeatures value.
+    if CONF_AUTOCONF in config:
+        cg.add(var.set_autoconf(config[CONF_AUTOCONF]))
+    if CONF_SUPPORTED_MODES in config:
+        modes = set(config[CONF_SUPPORTED_MODES])
+        cg.add(var.set_supported_modes(
+            "AUTO" in modes, "HEAT" in modes, "FAN" in modes, "DRY" in modes, "COOL" in modes
+        ))
+    if CONF_SUPPORTED_FAN_MODES in config:
+        fan_modes = set(config[CONF_SUPPORTED_FAN_MODES])
+        cg.add(var.set_supported_fan_modes(
+            "QUIET" in fan_modes, "LOW" in fan_modes, "MEDIUM" in fan_modes,
+            "HIGH" in fan_modes, "AUTO" in fan_modes
+        ))
+    if CONF_SUPPORTED_SWING_MODES in config:
+        swing_modes = set(config[CONF_SUPPORTED_SWING_MODES])
+        vertical = "VERTICAL" in swing_modes or "BOTH" in swing_modes
+        horizontal = "HORIZONTAL" in swing_modes or "BOTH" in swing_modes
+        cg.add(var.set_supported_swing_modes(vertical, horizontal))
+    if CONF_FILTER_TIMER in config:
+        cg.add(var.set_filter_timer(config[CONF_FILTER_TIMER]))
+    if CONF_SENSOR_SWITCHING in config:
+        cg.add(var.set_sensor_switching(config[CONF_SENSOR_SWITCHING]))
+    if CONF_MAINTENANCE in config:
+        cg.add(var.set_maintenance(config[CONF_MAINTENANCE]))
+    if CONF_ECONOMY_MODE in config:
+        cg.add(var.set_economy_mode(config[CONF_ECONOMY_MODE]))
 
     varx = cg.Pvariable(config[CONF_STANDBY_MODE][CONF_ID], var.standby_sensor)
     await binary_sensor.register_binary_sensor(varx, config[CONF_STANDBY_MODE])
@@ -264,6 +373,9 @@ async def to_code(config: ConfigType) -> None:
 
     varx = cg.Pvariable(config[CONF_CONNECTED][CONF_ID], var.connected_sensor)
     await binary_sensor.register_binary_sensor(varx, config[CONF_CONNECTED])
+
+    varx = cg.Pvariable(config[CONF_SUPPORTED_FEATURES][CONF_ID], var.supported_features_sensor)
+    await text_sensor.register_text_sensor(varx, config[CONF_SUPPORTED_FEATURES])
 
     varx = cg.Pvariable(config[CONF_REMOTE_SENSOR][CONF_ID], var.remote_sensor)
     await sensor.register_sensor(varx, config[CONF_REMOTE_SENSOR])

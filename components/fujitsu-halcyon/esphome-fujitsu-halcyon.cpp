@@ -4,7 +4,6 @@
 #include <type_traits>
 
 #include <esphome/core/helpers.h>
-#include <esphome/core/version.h>
 
 namespace esphome::fujitsu_general_airstage_h_controller {
 
@@ -12,9 +11,20 @@ static const auto TAG = "esphome::fujitsu_general_airstage_h_controller";
 
 constexpr std::array ControllerName = { "Primary", "Secondary", "Undocumented" };
 
+void FujitsuHalcyonController::loop() {
+    this->controller->process_uart_data();
+}
+
 void FujitsuHalcyonController::setup() {
+    // Currently no way to do this in IDFUARTComponent YAML configuration without setting the flow control pin.
+    // Using RTS is not needed, but the side effect of suppressing input during output is, as the LIN chip provides loopback.
+    if (auto err = uart_set_mode(static_cast<uart_port_t>(static_cast<uart::IDFUARTComponent*>(this->parent_)->get_hw_serial_number()), UART_MODE_RS485_HALF_DUPLEX) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set UART mode: %s", esp_err_to_name(err));
+        this->mark_failed();
+        return;
+    }
+
     this->controller = new fujitsu_general::airstage::h::Controller(
-        static_cast<uart::IDFUARTComponent*>(this->parent_)->get_hw_serial_number(),
         this->controller_address_, this->transmit_, this->tx_delay_, this->tx_test_,
         {
             .Config = [this](const fujitsu_general::airstage::h::Config& data){ this->update_from_device(data); },
@@ -36,6 +46,9 @@ void FujitsuHalcyonController::setup() {
                 this->tx_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d) %lu", total, invalid_type,
                     stats[0], stats[1], stats[2], stats[3], stats[4], tx_delay));
             },
+            .AvailableBytes = [this]() -> size_t {
+                return this->available();
+            },
             .ReadBytes  = [this](uint8_t *buf, size_t length){
                 this->read_array(buf, length);
                 this->log_buffer("RX", buf, length);
@@ -44,27 +57,24 @@ void FujitsuHalcyonController::setup() {
                 this->write_array(buf, length);
                 this->log_buffer("TX", buf, length);
             }
-        },
-        *static_cast<uart::IDFUARTComponent*>(this->parent_)->get_uart_event_queue()
+        }
     );
 
-    if (!this->controller->start()) {
-        ESP_LOGE(TAG, "Failed to start controller");
-        this->mark_failed();
-        return;
-    }
+    // Apply user-supplied feature overrides from YAML. features_override_ was
+    // initialized to DefaultFeatures and individually mutated by any setters
+    // called from to_code(); fields the user did not specify still hold their
+    // DefaultFeatures value. Must be applied before the first packet is processed;
+    // setup() runs before loop() so this is safe.
+    this->controller->set_features(this->features_override_);
+    this->controller->set_autoconf(this->autoconf_);
 
     this->connected_sensor->publish_state(false);
 
     // Use specified sensor for this components reported temperature
     if (this->temperature_sensor_ != nullptr) {
         // Temperature sensor is in Fahrenheit, but need Celsius
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2025, 11, 0)
         const auto unit_of_measurement = this->temperature_sensor_->get_unit_of_measurement_ref();
         if (unit_of_measurement[unit_of_measurement.size() - 1] == 'F')
-#else
-        if (this->temperature_sensor_->get_unit_of_measurement().ends_with("F"))
-#endif
         {
             this->temperature_sensor_->add_on_raw_state_callback([this](float state) {
                 this->current_temperature = esphome::fahrenheit_to_celsius(state);
@@ -140,6 +150,35 @@ void FujitsuHalcyonController::on_initialization_stage(const fujitsu_general::ai
     // Expose feature dependent entities now that features are known,
     // and force a state publish so HA discovers them even if ListEntities already ran
     auto features = this->controller->get_features();
+
+    // Publish supported features as a human-readable diagnostic string.
+    // Built with basic string concatenation — std::format is not available in ESPHome.
+    {
+        std::string s;
+
+        s += "Mode:";
+        if (features.Mode.Auto)   s += " Auto";
+        if (features.Mode.Heat)   s += " Heat";
+        if (features.Mode.Cool)   s += " Cool";
+        if (features.Mode.Dry)    s += " Dry";
+        if (features.Mode.Fan)    s += " Fan";
+
+        s += " | Fan:";
+        if (features.FanSpeed.Auto)   s += " Auto";
+        if (features.FanSpeed.High)   s += " High";
+        if (features.FanSpeed.Medium) s += " Medium";
+        if (features.FanSpeed.Low)    s += " Low";
+        if (features.FanSpeed.Quiet)  s += " Quiet";
+
+        if (features.EconomyMode)       s += " | Economy";
+        if (features.FilterTimer)       s += " | Filter Timer";
+        if (features.SensorSwitching)   s += " | Sensor Switching";
+        if (features.Maintenance)       s += " | Maintenance";
+        if (features.VerticalLouvers)   s += " | V.Louvers";
+        if (features.HorizontalLouvers) s += " | H.Louvers";
+
+        this->supported_features_sensor->publish_state(s);
+    }
 
     if (features.SensorSwitching && this->temperature_sensor_ != nullptr) {
         this->use_sensor_switch->set_internal(false);
@@ -228,7 +267,7 @@ climate::ClimateTraits FujitsuHalcyonController::traits() {
     traits.set_visual_temperature_step(1);
     traits.set_visual_min_temperature(fujitsu_general::airstage::h::MinSetpoint);
     traits.set_visual_max_temperature(fujitsu_general::airstage::h::MaxSetpoint);
-#if ESPHOME_VERSION_CODE >= VERSION_CODE(2025, 11, 0)
+
     // Current temperature
     if (this->temperature_sensor_ != nullptr || !this->remote_sensor->is_internal())
         traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
@@ -236,14 +275,6 @@ climate::ClimateTraits FujitsuHalcyonController::traits() {
     // Current humidity
     if (this->humidity_sensor_ != nullptr)
         traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_HUMIDITY);
-#else
-    // Current temperature
-    if (this->temperature_sensor_ != nullptr || !this->remote_sensor->is_internal())
-        traits.set_supports_current_temperature(true);
-
-    // Current humidity
-    traits.set_supports_current_humidity(this->humidity_sensor_ != nullptr);
-#endif
 
     // Mode
     if (features.Mode.Auto)
@@ -426,7 +457,7 @@ void FujitsuHalcyonController::update_from_controller(const uint8_t address, con
             this->remote_sensor->set_internal(false);
 
         // Update remote controllers sensor component with remote controllers reported temperature
-        if (data.Controller.Temperature != this->remote_sensor->raw_state)
+        if (data.Controller.Temperature != this->remote_sensor->get_raw_state())
             this->remote_sensor->publish_state(data.Controller.Temperature);
     }
 }
@@ -490,7 +521,7 @@ constexpr fujitsu_general::airstage::h::ModeEnum FujitsuHalcyonController::clima
         // Should not get to this point if traits is respected
         default: return FujitsuMode::Fan;
     }
-} 
+}
 
 constexpr fujitsu_general::airstage::h::FanSpeedEnum FujitsuHalcyonController::climate_fan_mode_to_fan_speed(climate::ClimateFanMode fan_speed) {
     using climate::ClimateFanMode;
