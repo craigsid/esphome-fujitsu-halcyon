@@ -133,7 +133,14 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
         this->update_to_me_stats(packet.Type);
     }
 
-    // Finish initialization
+    // Check for poll to us to complete initialisation
+    if (this->initialization_stage == InitializationStageEnum::WaitForPoll
+        && this->lastPacketToMe && packet.Type == PacketTypeEnum::Config) {
+        // then transition to complete
+        this->set_initialization_stage(InitializationStageEnum::Complete);
+    }
+
+    // Check for next controller
     if (this->initialization_stage == InitializationStageEnum::FindNextControllerRx) {
         // Controller with address > configured did not transmit
         if (packet.SourceType != AddressTypeEnum::Controller)
@@ -141,13 +148,6 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
 
         // Fujitsu RC1 checks for next controller twice (in case of slow booting controller?), but we are only checking once
         this->set_initialization_stage(InitializationStageEnum::WaitForPoll);
-    }
-
-    // If CONFIG sent to us...
-    if (this->initialization_stage == InitializationStageEnum::WaitForPoll
-        && this->lastPacketToMe && packet.Type == PacketTypeEnum::Config) {
-        // then transition to complete
-        this->set_initialization_stage(InitializationStageEnum::Complete);
     }
 
     // Process packets from Indoor Units
@@ -229,81 +229,9 @@ void Controller::transmit_packet() {
     tx_packet.SourceType = AddressTypeEnum::Controller;
     tx_packet.SourceAddress = this->controller_address;
 
-    if (this->initialization_stage == InitializationStageEnum::FeatureRequestTx) {
-        tx_packet.Type = PacketTypeEnum::Features;
-        // Advance only after the request is actually transmitted, mirroring
-        // the FindNextControllerTx -> FindNextControllerRx transition above.
-        this->set_initialization_stage(InitializationStageEnum::FeatureRequestRx);
-    }
-    else if ((error_flag_changed && this->is_primary_controller()) ||
-            (this->lastPacketType == PacketTypeEnum::Error && !this->is_primary_controller()))
-        tx_packet.Type = PacketTypeEnum::Error;
-    else if (!this->function_queue.empty()) {
-        tx_packet.Type = PacketTypeEnum::Function;
-        tx_packet.Function = this->function_queue.front();
-        this->function_queue.pop();
-    }
-    else {
-        // First CONFIG packet sent from Fujitsu controller has write flag set, but we do not restore state at this time
-        tx_packet.Type = PacketTypeEnum::Config;
-        tx_packet.Config = this->current_configuration;
-        tx_packet.Config.Controller.Temperature = this->changed_configuration.Controller.Temperature;
-        tx_packet.Config.Controller.UseControllerSensor = this->changed_configuration.Controller.UseControllerSensor;
-
-        if (this->configuration_changes.any()) {
-            tx_packet.Config.Controller.Write = true;
-
-            // Overwrite fields received from Indoor Unit
-            if (this->configuration_changes[SettableFields::Enabled])
-                tx_packet.Config.Enabled = this->changed_configuration.Enabled;
-
-            if (this->configuration_changes[SettableFields::Economy])
-                tx_packet.Config.Economy = this->changed_configuration.Economy;
-
-            if (this->configuration_changes[SettableFields::Setpoint])
-                tx_packet.Config.Setpoint = this->changed_configuration.Setpoint;
-
-            if (this->configuration_changes[SettableFields::TestRun])
-                tx_packet.Config.TestRun = this->changed_configuration.TestRun;
-
-            if (this->configuration_changes[SettableFields::Mode])
-                tx_packet.Config.Mode = this->changed_configuration.Mode;
-
-            if (this->configuration_changes[SettableFields::FanSpeed])
-                tx_packet.Config.FanSpeed = this->changed_configuration.FanSpeed;
-
-            if (this->configuration_changes[SettableFields::SwingVertical])
-                tx_packet.Config.SwingVertical = this->changed_configuration.SwingVertical;
-
-            if (this->configuration_changes[SettableFields::SwingHorizontal])
-                tx_packet.Config.SwingHorizontal = this->changed_configuration.SwingHorizontal;
-
-            // Set fields not returned from Indoor Unit
-            if (this->configuration_changes[SettableFields::AdvanceVerticalLouver])
-                tx_packet.Config.Controller.AdvanceVerticalLouver = this->changed_configuration.Controller.AdvanceVerticalLouver;
-
-            if (this->configuration_changes[SettableFields::AdvanceHorizontalLouver])
-                tx_packet.Config.Controller.AdvanceHorizontalLouver = this->changed_configuration.Controller.AdvanceHorizontalLouver;
-
-            if (this->configuration_changes[SettableFields::ResetFilterTimer])
-                tx_packet.Config.Controller.ResetFilterTimer = this->changed_configuration.Controller.ResetFilterTimer;
-
-            if (this->configuration_changes[SettableFields::Maintenance])
-                tx_packet.Config.Controller.Maintenance = this->changed_configuration.Controller.Maintenance;
-       }
-
-       this->configuration_changes.reset();
-
-       // Some fields need to be written clear in next tx packet
-       if (tx_packet.Config.Controller.ResetFilterTimer) {
-           this->changed_configuration.Controller.ResetFilterTimer = false;
-           this->configuration_changes[SettableFields::ResetFilterTimer] = true;
-       }
-
-       if (tx_packet.Config.Controller.Maintenance) {
-           this->changed_configuration.Controller.Maintenance = false;
-           this->configuration_changes[SettableFields::Maintenance] = true;
-       }
+    if (this->initialization_stage == InitializationStageEnum::FindNextControllerTx) {
+        this->next_token_destination_type = AddressTypeEnum::Controller;
+        this->set_initialization_stage(InitializationStageEnum::FindNextControllerRx);
     }
 
     tx_packet.TokenDestinationType = this->next_token_destination_type;
@@ -314,14 +242,16 @@ void Controller::transmit_packet() {
         // Advance only after the request is actually transmitted, mirroring
         // the FindNextControllerTx -> FindNextControllerRx transition above.
         this->set_initialization_stage(InitializationStageEnum::FeatureRequestRx);
-    } else if ((this->error_flag_changed && this->is_primary_controller()) ||
-               (this->lastPacketType == PacketTypeEnum::Error && !this->is_primary_controller())) {
+    }
+    else if ((error_flag_changed && this->is_primary_controller()) ||
+             (this->lastPacketType == PacketTypeEnum::Error && !this->is_primary_controller()))
         tx_packet.Type = PacketTypeEnum::Error;
-    } else if (!this->function_queue.empty()) {
+    else if (!this->function_queue.empty()) {
         tx_packet.Type = PacketTypeEnum::Function;
         tx_packet.Function = this->function_queue.front();
         this->function_queue.pop();
-    } else {
+    }
+    else {
         // First CONFIG packet sent from Fujitsu controller has write flag set, but we do not restore state at this time
         tx_packet.Type = PacketTypeEnum::Config;
         tx_packet.Config = this->current_configuration;
