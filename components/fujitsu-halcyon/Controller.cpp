@@ -39,9 +39,10 @@ void Controller::process_uart_data() {
             this->transmit_packet();
         }
     }
-    // Have now (hopefully) transmitted on time so call pending callback                                                
-    if (this->deferred_callback) {                                                                  
+    // If outside poll window then run deferred callback
+    if (!this->lastPacketToMe && this->deferred_callback) {                                                                  
         this->deferred_callback();                                                                                                                      
+	this->deferred_callback = nullptr;
     }     
 
 }
@@ -79,7 +80,6 @@ void Controller::set_initialization_stage(const InitializationStageEnum stage) {
 
 void Controller::update_rx_stats(PacketTypeEnum packetType) {
     // increment packet stats
-    this->rx_time = esp_timer_get_time() / 1000ULL;
     this->rx_total++;
     this->lastPacketType = packetType; // Save last packet type
     int idx = static_cast<int>(packetType);
@@ -90,6 +90,11 @@ void Controller::update_rx_stats(PacketTypeEnum packetType) {
     }
     if (this->callbacks.RxPktStats)
         callbacks.RxPktStats(this->rx_total, this->rx_invalid_type, this->rx_stats);
+
+    // update to me stats
+    if (this->lastPacketToMe) this->update_to_me_stats(packetType);
+    // update rx time as the very last thing we do
+    this->rx_time = esp_timer_get_time() / 1000ULL;
 }
 
 void Controller::update_to_me_stats(PacketTypeEnum packetType) {
@@ -124,20 +129,15 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
     // Parse buffer
     Packet packet(buffer);
 
-    // increment packet stats
-    this->update_rx_stats(packet.Type);
-
     // Was this a packet for us ?
     if (packet.TokenDestinationType == AddressTypeEnum::Controller && packet.TokenDestinationAddress == this->controller_address) {
         this->lastPacketToMe = true;
-        this->update_to_me_stats(packet.Type);
-    }
 
-    // Check for poll to us to complete initialisation
-    if (this->initialization_stage == InitializationStageEnum::WaitForPoll
-        && this->lastPacketToMe && packet.Type == PacketTypeEnum::Config) {
-        // then transition to complete
-        this->set_initialization_stage(InitializationStageEnum::Complete);
+        // Check for poll to us to complete initialisation
+        if (this->initialization_stage == InitializationStageEnum::WaitForPoll) {
+            // then transition to complete
+            this->set_initialization_stage(InitializationStageEnum::Complete);
+        }
     }
 
     // Check for next controller
@@ -221,6 +221,8 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
         }
     }
 
+    // increment packet stats
+    this->update_rx_stats(packet.Type);
 }
 
 void Controller::transmit_packet() {
