@@ -2,12 +2,17 @@
 
 #include <array>
 #include <bit>
+#include <bitset>
+#include <concepts>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 
 namespace fujitsu_general::airstage::h {
 
 constexpr uint8_t PrimaryAddress = 0;
 constexpr uint8_t MaxAddress = 15;
+constexpr uint8_t MaxZone = 8; // Excludes Common/Constant Zone
 
 enum class AddressTypeEnum : uint8_t {
     IndoorUnit,
@@ -19,7 +24,9 @@ enum class PacketTypeEnum : uint8_t {
     Error,
     Features,
     Function,
-    Status
+    Status,
+    ZoneConfig,
+    ZoneFunction
 };
 
 enum class FanSpeedEnum : uint8_t {
@@ -81,6 +88,7 @@ struct Config {
 };
 
 struct Error {
+    uint8_t ErrorCodeExtended;
     uint8_t ErrorCode;
 };
 
@@ -107,6 +115,7 @@ struct Features {
     bool EconomyMode;
     bool HorizontalLouvers;
     bool VerticalLouvers;
+    bool Zones;
 };
 
 struct Function {
@@ -120,6 +129,38 @@ struct Function {
 };
 
 struct Status {};
+
+struct ZoneConfig {
+    struct {
+        bool Write;
+    } Controller;
+
+    std::bitset<MaxZone> ActiveZones;
+
+    struct {
+        bool Day;
+        bool Night;
+    } ActiveZoneGroups;
+
+    struct {
+        std::bitset<MaxZone> Day;
+        std::bitset<MaxZone> Night;
+    } ZoneGroupAssociations;
+};
+
+struct ZoneFunction {
+    struct Zones {
+        bool ZoneCommon;
+        std::bitset<MaxZone> EnabledZones;
+    } IndoorUnit;
+
+    struct {
+        bool Write;
+    } Controller;
+
+    uint8_t Function;
+    uint8_t Value;
+};
 
 struct ByteMaskShiftData {
     constexpr ByteMaskShiftData(uint8_t byte, uint8_t mask) : byte(byte), mask(mask), shift(std::countr_zero(mask)) {};
@@ -146,18 +187,18 @@ constexpr struct BMS {
                 constexpr static auto Mode                  = ByteMaskShiftData(6, 0b00100000);
                 constexpr static auto Timer                 = ByteMaskShiftData(6, 0b00001000);
                 constexpr static auto All                   = ByteMaskShiftData(6, 0b00000100);
-            } Lock = {};
+            } Lock {};
 
             constexpr static struct SeenController_ {
                 constexpr static auto Secondary             = ByteMaskShiftData(6, 0b00000010);
                 constexpr static auto Primary               = ByteMaskShiftData(6, 0b00000001);
-            } SeenController = {};
+            } SeenController {};
 
             constexpr static auto StandbyMode             = ByteMaskShiftData(2, 0b00001000);
             constexpr static auto Error                   = ByteMaskShiftData(3, 0b10000000);
             constexpr static auto UnknownFlags            = ByteMaskShiftData(5, 0b11100000);
             constexpr static auto FilterTimerExpired      = ByteMaskShiftData(7, 0b01000000);
-        } IndoorUnit = {};
+        } IndoorUnit {};
 
         constexpr static struct Controller_ {
             constexpr static auto Write                   = ByteMaskShiftData(2, 0b00001000);
@@ -167,7 +208,7 @@ constexpr struct BMS {
             constexpr static auto Temperature             = ByteMaskShiftData(6, 0b01111111);
             constexpr static auto ResetFilterTimer        = ByteMaskShiftData(7, 0b01000000);
             constexpr static auto Maintenance             = ByteMaskShiftData(7, 0b00100000);
-        } Controller = {};
+        } Controller {};
 
         constexpr static auto FanSpeed                  = ByteMaskShiftData(3, 0b01110000);
         constexpr static auto Mode                      = ByteMaskShiftData(3, 0b00001110);
@@ -180,6 +221,7 @@ constexpr struct BMS {
     } Config {};
 
     constexpr static struct Error_ {
+        constexpr static auto ErrorCodeExtended         = ByteMaskShiftData(3, 0b11110000);
         constexpr static auto ErrorCode                 = ByteMaskShiftData(4, 0b11111111);
     } Error {};
 
@@ -206,6 +248,7 @@ constexpr struct BMS {
         constexpr static auto EconomyMode               = ByteMaskShiftData(5, 0b00000100);
         constexpr static auto HorizontalLouvers         = ByteMaskShiftData(5, 0b00000010);
         constexpr static auto VerticalLouvers           = ByteMaskShiftData(5, 0b00000001);
+        constexpr static auto Zones                     = ByteMaskShiftData(6, 0b00010000);
     } Features {};
 
     constexpr static struct Function_ {
@@ -219,6 +262,36 @@ constexpr struct BMS {
     } Function {};
 
     constexpr static struct Status_ {} Status {};
+
+    constexpr static struct ZoneConfig_ {
+        constexpr static struct Controller_ {
+            constexpr static auto Write                 = ByteMaskShiftData(2, 0b00001000);
+        } Controller {};
+
+        constexpr static auto ActiveZones               = ByteMaskShiftData(3, 0b11111111);
+
+        constexpr static struct ActiveZoneGroups_ {
+            constexpr static auto Day                   = ByteMaskShiftData(4, 0b00001000);
+            constexpr static auto Night                 = ByteMaskShiftData(4, 0b00010000);
+        } ActiveZoneGroups {};
+
+        constexpr static auto ZoneGroupAssociations1_4  = ByteMaskShiftData(5, 0b11111111);
+        constexpr static auto ZoneGroupAssociations5_8  = ByteMaskShiftData(6, 0b11111111);
+    } ZoneConfig {};
+
+    constexpr static struct ZoneFunction_ {
+        constexpr static struct IndoorUnit_ {
+            constexpr static auto ZoneCommon            = ByteMaskShiftData(2, 0b00001000);
+            constexpr static auto EnabledZones          = ByteMaskShiftData(3, 0b11111111);
+        } IndoorUnit = {};
+
+        constexpr static struct Controller_ {
+            constexpr static auto Write                 = ByteMaskShiftData(5, 0b10000000);
+        } Controller {};
+
+        constexpr static auto Function                  = ByteMaskShiftData(6, 0b11111111);
+        constexpr static auto Value                     = ByteMaskShiftData(7, 0b11111111);
+    } ZoneFunction {};
 } BMS;
 static_assert(BMS.Type.shift == 4 && BMS.Features.FanSpeed.Low.shift == 3, "Shift values calculated incorrectly");
 
@@ -244,8 +317,40 @@ class Packet {
         struct Function Function {};
         struct Features Features {};
         struct Status Status {};
+        struct ZoneConfig ZoneConfig {};
+        struct ZoneFunction ZoneFunction {};
 
-        static void invert_buffer(Buffer& buffer) { *reinterpret_cast<uint64_t*>(buffer.data()) = ~*reinterpret_cast<uint64_t*>(buffer.data()); };
+        // Bitwise-invert the whole frame. Uses memcpy rather than
+        // reinterpret_cast<uint64_t*> to avoid the strict-aliasing UB and the
+        // unaligned 64-bit access that would fault on some targets (e.g. RISC-V
+        // ESP32-C3, ESP8266); the compiler still lowers this to a single word op.
+        static void invert_buffer(Buffer& buffer) {
+            static_assert(sizeof(Buffer) == sizeof(uint64_t), "Frame must be exactly 64 bits wide");
+            uint64_t word;
+            std::memcpy(&word, buffer.data(), sizeof(word));
+            word = ~word;
+            std::memcpy(buffer.data(), &word, sizeof(word));
+        };
+
+    private:
+        // std::bit_compress/std::bit_expand have been proposed for c++ STL (P3104), but are not available now so use these instead
+        template<std::unsigned_integral T>
+        [[nodiscard]] constexpr static T extract_bits(const T input, const bool odd) noexcept {
+            T output = 0;
+            for (size_t i = 0, j = 0; i < std::numeric_limits<T>::digits; i++)
+                if (i % 2 == odd)
+                    output |= (input >> i & 1) << j++;
+            return output;
+        };
+
+        template<std::unsigned_integral T>
+        [[nodiscard]] constexpr static T interleave_bits(const T input, const bool odd) noexcept {
+            T output = 0;
+            for (size_t i = 0, j = 0; i < std::numeric_limits<T>::digits; i++)
+                if (i % 2 == odd)
+                    output |= (input >> j++ & 1) << i;
+            return output;
+        };
 };
 
 }

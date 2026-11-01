@@ -11,7 +11,7 @@ using esphome::esp_log_printf_;
 
 namespace fujitsu_general::airstage::h {
 
-static const char* TAG = "fujitsu_general::airstage::h::Controller";
+static const char* TAG = "fujitsu_halcyon";
 
 void Controller::process_uart_data() {
     // Check received packets
@@ -22,7 +22,7 @@ void Controller::process_uart_data() {
         // Discard partial frame
         if (auto discard = buffer_len % buffer.size()) {
             this->uart_read_bytes(buffer.data(), discard);
-            ESP_LOGW(TAG, "Discarded %d bytes", discard);
+            ESP_LOGW(TAG, "Discarded %zu bytes", discard);
         }
 
         // For each frame
@@ -70,10 +70,12 @@ void Controller::set_initialization_stage(const InitializationStageEnum stage) {
     // See if we need to skip 
     if (this->skip_find_next_controller && stage == InitializationStageEnum::FindNextControllerTx) {
         this->initialization_stage = InitializationStageEnum::FindNextControllerRx;
-        ESP_LOGW(TAG, "skipping find next controller, changing to state %d", this->initialization_stage);
+        ESP_LOGW(TAG, "skipping find next controller, changing to state %d", static_cast<int>(this->initialization_stage));
     } else {
         this->initialization_stage = stage;
     }
+
+    // This callback is not deferred; may need to redesign if it causes a delay beyond the transmit window
     if (this->callbacks.InitializationStage)
         callbacks.InitializationStage(this->initialization_stage);
 }
@@ -147,7 +149,7 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
             this->next_token_destination_type = AddressTypeEnum::IndoorUnit;
 
         // Fujitsu RC1 checks for next controller twice (in case of slow booting controller?), but we are only checking once
-        this->set_initialization_stage(InitializationStageEnum::WaitForPoll);
+        this->set_initialization_stage(this->features.Zones ? InitializationStageEnum::ZoneRequestActive : InitializationStageEnum::WaitForPoll);
     }
 
     // Process packets from Indoor Units
@@ -155,18 +157,15 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
         switch (packet.Type) {
             [[likely]] case PacketTypeEnum::Config:
                 if (this->initialization_stage == InitializationStageEnum::DetectFeatureSupport) {
-                    // Advance to FindNextControllerTx (skip feature negotiation entirely) if:
-                    //  - autoconf is disabled (use the configured features directly), or
-                    //  - the IU's UnknownFlags == 2 (no feature negotiation support).
-                    // Otherwise, transition to FeatureRequestTx to send a FeatureRequest packet
-                    // when our turn with the token comes around. The actual transmission and
-                    // the subsequent transition to FeatureRequestRx happen later in this function.
-                    // Note: this->features is already initialized to DefaultFeatures (or to a
-                    // user-supplied override via set_features()), so no assignment is needed here.
-                    if (!this->autoconf ||
-                        packet.Config.IndoorUnit.UnknownFlags == 2) {
+                    // Advance to FindNextControllerTx (skip feature negotiation entirely) if
+                    // autoconf is disabled, otherwise transition to FeatureRequestTx to send a
+                    // FeatureRequest packet when our turn with the token comes around. The
+                    // actual transmission and the subsequent transition to FeatureRequestRx
+                    // happen later in this function. this->features is already initialized to
+                    // DefaultFeatures (or to a user-supplied override via set_features()).
+                    if (!this->autoconf)
                         this->set_initialization_stage(InitializationStageEnum::FindNextControllerTx);
-                    } else
+                    else
                         this->set_initialization_stage(InitializationStageEnum::FeatureRequestTx);
                 }
                 else if (this->initialization_stage == InitializationStageEnum::FeatureRequestRx) {
@@ -192,20 +191,47 @@ void Controller::process_packet(const Packet::Buffer& buffer) {
                 break;
 
             case PacketTypeEnum::Error:
+                // A unit without feature negotiation answers the FeatureRequest with an
+                // empty error instead of a Features packet. Take it as the answer and
+                // carry on with the features already in this->features.
+                if (this->initialization_stage == InitializationStageEnum::FeatureRequestRx &&
+                    packet.Error.ErrorCode == 0 && packet.Error.ErrorCodeExtended == 0) {
+                    ESP_LOGW(TAG, "Indoor unit refused the feature request, using the configured features. Set autoconf: false to stop asking");
+                    this->set_initialization_stage(InitializationStageEnum::FindNextControllerTx);
+                }
+
                 if (this->callbacks.Error)
                     this->deferred_callback = [&](){ this->callbacks.Error(packet); };
                 break;
 
             case PacketTypeEnum::Features:
                 this->features = packet.Features;
-                this->set_initialization_stage(InitializationStageEnum::FindNextControllerTx);
+                this->set_initialization_stage(this->features.Zones ? InitializationStageEnum::ZoneRequestEnabled : InitializationStageEnum::FindNextControllerTx);
                 break;
 
             case PacketTypeEnum::Function:
                 if (this->callbacks.Function)
                     this->deferred_callback = [&](){ this->callbacks.Function(packet.Function); };
                 break;
+
             case PacketTypeEnum::Status:
+                break;
+
+            case PacketTypeEnum::ZoneConfig:
+                this->current_zone_configuration = packet.ZoneConfig;
+
+                if (this->initialization_stage == InitializationStageEnum::ZoneRequestActive)
+                    this->set_initialization_stage(InitializationStageEnum::Complete);
+
+                if (this->callbacks.ZoneConfig)
+                    deferred_callback = [&](){ this->callbacks.ZoneConfig(this->current_zone_configuration); };
+                break;
+
+            case PacketTypeEnum::ZoneFunction:
+                this->zones = packet.ZoneFunction.IndoorUnit;
+
+                if (this->initialization_stage == InitializationStageEnum::ZoneRequestEnabled)
+                    this->set_initialization_stage(InitializationStageEnum::FindNextControllerTx);
                 break;
         }
     } else {
@@ -239,15 +265,37 @@ void Controller::transmit_packet() {
     tx_packet.TokenDestinationType = this->next_token_destination_type;
     tx_packet.TokenDestinationAddress = this->next_token_destination_type == AddressTypeEnum::Controller ? this->controller_address + 1 : 1;
 
-    if (this->initialization_stage == InitializationStageEnum::FeatureRequestTx) {
+    if ((error_flag_changed && this->is_primary_controller()) ||
+             (this->lastPacketType == PacketTypeEnum::Error && !this->is_primary_controller()))
+        tx_packet.Type = PacketTypeEnum::Error;
+    else if (this->initialization_stage == InitializationStageEnum::FeatureRequestTx) {
         tx_packet.Type = PacketTypeEnum::Features;
         // Advance only after the request is actually transmitted, mirroring
         // the FindNextControllerTx -> FindNextControllerRx transition above.
         this->set_initialization_stage(InitializationStageEnum::FeatureRequestRx);
     }
-    else if ((error_flag_changed && this->is_primary_controller()) ||
-             (this->lastPacketType == PacketTypeEnum::Error && !this->is_primary_controller()))
-        tx_packet.Type = PacketTypeEnum::Error;
+    else if (this->initialization_stage == InitializationStageEnum::ZoneRequestEnabled)
+        tx_packet.Type = PacketTypeEnum::ZoneFunction;
+    else if (this->initialization_stage == InitializationStageEnum::ZoneRequestActive)
+        tx_packet.Type = PacketTypeEnum::ZoneConfig;
+    else if (this->zone_configuration_changes.any()) {
+        tx_packet.Type = PacketTypeEnum::ZoneConfig;
+        tx_packet.ZoneConfig = this->current_zone_configuration;
+        tx_packet.ZoneConfig.Controller.Write = true;
+
+        // Overwrite fields last received from Indoor Unit
+        for (size_t i = ZoneSettableFields::Zone1Active; i <= ZoneSettableFields::Zone8Active; i++)
+            if (this->zone_configuration_changes[i])
+                tx_packet.ZoneConfig.ActiveZones[i] = this->changed_zone_configuration.ActiveZones[i];
+
+        if (this->zone_configuration_changes[ZoneSettableFields::ZoneGroupDayActive])
+            tx_packet.ZoneConfig.ActiveZoneGroups.Day = this->changed_zone_configuration.ActiveZoneGroups.Day;
+
+        if (this->zone_configuration_changes[ZoneSettableFields::ZoneGroupNightActive])
+            tx_packet.ZoneConfig.ActiveZoneGroups.Night = this->changed_zone_configuration.ActiveZoneGroups.Night;
+
+        this->zone_configuration_changes.reset();
+    }
     else if (!this->function_queue.empty()) {
         tx_packet.Type = PacketTypeEnum::Function;
         tx_packet.Function = this->function_queue.front();
@@ -333,7 +381,12 @@ void Controller::transmit_packet() {
 }
 
 void Controller::set_current_temperature(float temperature) {
-    this->changed_configuration.Controller.Temperature = std::clamp(std::isfinite(temperature) ? temperature : 0, MinTemperature, MaxTemperature);
+    // An unavailable source sensor reports NaN. Keep the last good value rather
+    // than sending 0 C, which would tell the unit the room is at freezing.
+    if (!std::isfinite(temperature))
+        return;
+
+    this->changed_configuration.Controller.Temperature = std::clamp(temperature, MinTemperature, MaxTemperature);
     // Do not set configuration_changed flag - does not require write bit set
 }
 
@@ -547,6 +600,54 @@ bool Controller::maintenance(bool ignore_lock) {
 
     this->changed_configuration.Controller.Maintenance = true;
     this->configuration_changes[SettableFields::Maintenance] = true;
+    return true;
+}
+
+bool Controller::set_zone(uint8_t zone, bool active, bool ignore_lock) {
+    if (!ignore_lock && this->current_configuration.IndoorUnit.Lock.All)
+        return false;
+
+    if (zone >= MaxZone || !this->zones.EnabledZones[zone])
+        return false;
+
+    // Ensure at least one outlet is open
+    if (!active && !this->zones.ZoneCommon) {
+        // Merge current and changed zone configurations to determine if any zones will remain active
+        auto merged_active_zones = this->current_zone_configuration.ActiveZones;
+        if (this->zone_configuration_changes.any())
+            for (auto i = 0; i < MaxZone; i++)
+                if (this->zone_configuration_changes[i])
+                    merged_active_zones[i] = this->changed_zone_configuration.ActiveZones[i];
+        merged_active_zones[zone] = active;
+
+        if (merged_active_zones.none())
+            return false;
+    }
+
+    // Invalidate active zone groups
+    this->set_zone_group_day(false, true);
+    this->set_zone_group_night(false, true);
+
+    this->changed_zone_configuration.ActiveZones[zone] = active;
+    this->zone_configuration_changes[zone] = true;
+    return true;
+}
+
+bool Controller::set_zone_group_day(bool active, bool ignore_lock) {
+    if (!ignore_lock && this->current_configuration.IndoorUnit.Lock.All)
+        return false;
+
+    this->changed_zone_configuration.ActiveZoneGroups.Day = active;
+    this->zone_configuration_changes[ZoneSettableFields::ZoneGroupDayActive] = true;
+    return true;
+}
+
+bool Controller::set_zone_group_night(bool active, bool ignore_lock) {
+    if (!ignore_lock && this->current_configuration.IndoorUnit.Lock.All)
+        return false;
+
+    this->changed_zone_configuration.ActiveZoneGroups.Night = active;
+    this->zone_configuration_changes[ZoneSettableFields::ZoneGroupNightActive] = true;
     return true;
 }
 

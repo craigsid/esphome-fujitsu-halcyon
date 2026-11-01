@@ -64,7 +64,10 @@ Packet::Packet(Buffer buffer) {
             break;
 
         case PacketTypeEnum::Error:
-            this->Error.ErrorCode = getField(BMS.Error.ErrorCode);
+            if (this->SourceType == AddressTypeEnum::IndoorUnit) {
+                this->Error.ErrorCode = getField(BMS.Error.ErrorCode);
+                this->Error.ErrorCodeExtended = getField(BMS.Error.ErrorCodeExtended);
+            }
             break;
 
         case PacketTypeEnum::Features:
@@ -88,6 +91,8 @@ Packet::Packet(Buffer buffer) {
 
                 this->Features.VerticalLouvers = getField(BMS.Features.VerticalLouvers);
                 this->Features.HorizontalLouvers = getField(BMS.Features.HorizontalLouvers);
+
+                this->Features.Zones = getField(BMS.Features.Zones);
             }
             break;
 
@@ -102,6 +107,33 @@ Packet::Packet(Buffer buffer) {
 
         case PacketTypeEnum::Status:
             break;
+
+        case PacketTypeEnum::ZoneConfig:
+            if (this->SourceType == AddressTypeEnum::Controller)
+                this->ZoneConfig.Controller.Write = getField(BMS.ZoneConfig.Controller.Write);
+
+            this->ZoneConfig.ActiveZones = getField(BMS.ZoneConfig.ActiveZones);
+            this->ZoneConfig.ActiveZoneGroups.Day = getField(BMS.ZoneConfig.ActiveZoneGroups.Day);
+            this->ZoneConfig.ActiveZoneGroups.Night = getField(BMS.ZoneConfig.ActiveZoneGroups.Night);
+
+            this->ZoneConfig.ZoneGroupAssociations.Day =
+                this->extract_bits(getField(BMS.ZoneConfig.ZoneGroupAssociations5_8), true) << 4 |
+                this->extract_bits(getField(BMS.ZoneConfig.ZoneGroupAssociations1_4), true);
+            this->ZoneConfig.ZoneGroupAssociations.Night =
+                this->extract_bits(getField(BMS.ZoneConfig.ZoneGroupAssociations5_8), false) << 4 |
+                this->extract_bits(getField(BMS.ZoneConfig.ZoneGroupAssociations1_4), false);
+            break;
+
+        case PacketTypeEnum::ZoneFunction:
+            if (this->SourceType == AddressTypeEnum::IndoorUnit) {
+                this->ZoneFunction.IndoorUnit.ZoneCommon = getField(BMS.ZoneFunction.IndoorUnit.ZoneCommon);
+                this->ZoneFunction.IndoorUnit.EnabledZones = getField(BMS.ZoneFunction.IndoorUnit.EnabledZones);
+            } else
+                this->ZoneFunction.Controller.Write = getField(BMS.ZoneFunction.Controller.Write);
+
+            this->ZoneFunction.Function = getField(BMS.ZoneFunction.Function);
+            this->ZoneFunction.Value = getField(BMS.ZoneFunction.Value);
+        break;
     }
 };
 
@@ -129,7 +161,8 @@ Packet::Buffer Packet::to_buffer() const {
                 setField(BMS.Config.IndoorUnit.Error, this->Config.IndoorUnit.Error);
 
                 setField(BMS.Config.IndoorUnit.SeenController.Primary, this->Config.IndoorUnit.SeenController.Primary);
-                setField(BMS.Config.IndoorUnit.SeenController.Secondary, this->Config.IndoorUnit.SeenController.Secondary);
+                if (!this->Features.Zones)   // SeenController.Secondary is incorrect name for models that support zone control, it is not set after second controller transmits.
+                    setField(BMS.Config.IndoorUnit.SeenController.Secondary, this->Config.IndoorUnit.SeenController.Secondary);
 
                 setField(BMS.Config.IndoorUnit.Lock.All, this->Config.IndoorUnit.Lock.All);
                 setField(BMS.Config.IndoorUnit.Lock.Timer, this->Config.IndoorUnit.Lock.Timer);
@@ -148,10 +181,9 @@ Packet::Buffer Packet::to_buffer() const {
                 setField(BMS.Config.Controller.AdvanceVerticalLouver, this->Config.Controller.AdvanceVerticalLouver);
                 setField(BMS.Config.Controller.AdvanceHorizontalLouver, this->Config.Controller.AdvanceHorizontalLouver);
 
-                setField(BMS.Config.Controller.Temperature,
-                    (int(this->Config.Controller.Temperature) << 1) +
-                    int(std::fmod(std::round(this->Config.Controller.Temperature * 2), 2))
-                );
+                // Encode in half-degree units. Round the whole value at once so
+                // the carry is not lost (e.g. 21.8 -> 22.0, not 21.0).
+                setField(BMS.Config.Controller.Temperature, std::lround(this->Config.Controller.Temperature * 2));
 
                 setField(BMS.Config.Controller.UseControllerSensor, this->Config.Controller.UseControllerSensor);
                 setField(BMS.Config.Controller.Maintenance, this->Config.Controller.Maintenance);
@@ -175,7 +207,12 @@ Packet::Buffer Packet::to_buffer() const {
             break;
 
         case PacketTypeEnum::Error:
-            setField(BMS.Error.ErrorCode, this->Error.ErrorCode);
+            if (SourceType == AddressTypeEnum::IndoorUnit) {
+                setField(BMS.Error.ErrorCode, this->Error.ErrorCode);
+                setField(BMS.Error.ErrorCodeExtended, this->Error.ErrorCodeExtended);
+                if (this->Error.ErrorCode)
+                    buffer[3] |= 0b00000001; // Unknown bit set in all captured error packets with error value from indoor unit
+            }
             break;
 
         case PacketTypeEnum::Features:
@@ -200,6 +237,8 @@ Packet::Buffer Packet::to_buffer() const {
                 setField(BMS.Features.VerticalLouvers, this->Features.VerticalLouvers);
                 setField(BMS.Features.HorizontalLouvers, this->Features.HorizontalLouvers);
 
+                setField(BMS.Features.Zones, this->Features.Zones);
+
                 buffer[6] |= 0b00000001; // Unknown bit set in all captured features packets from indoor unit
             }
             break;
@@ -214,6 +253,39 @@ Packet::Buffer Packet::to_buffer() const {
             break;
 
         case PacketTypeEnum::Status:
+            break;
+
+        case PacketTypeEnum::ZoneConfig:
+            if (SourceType == AddressTypeEnum::Controller) {
+                setField(BMS.ZoneConfig.Controller.Write, this->ZoneConfig.Controller.Write);
+
+                buffer[4] |= 0b10000000; // Unknown bit set in all captured zoneconfig packets from controller
+            }
+
+            setField(BMS.ZoneConfig.ActiveZones, this->ZoneConfig.ActiveZones.to_ulong());
+            setField(BMS.ZoneConfig.ActiveZoneGroups.Day, this->ZoneConfig.ActiveZoneGroups.Day);
+            setField(BMS.ZoneConfig.ActiveZoneGroups.Night, this->ZoneConfig.ActiveZoneGroups.Night);
+
+            setField(BMS.ZoneConfig.ZoneGroupAssociations1_4,
+                this->interleave_bits(static_cast<uint8_t>(this->ZoneConfig.ZoneGroupAssociations.Day.to_ulong()), true) |
+                this->interleave_bits(static_cast<uint8_t>(this->ZoneConfig.ZoneGroupAssociations.Night.to_ulong()), false));
+
+            setField(BMS.ZoneConfig.ZoneGroupAssociations5_8,
+                this->interleave_bits(static_cast<uint8_t>(this->ZoneConfig.ZoneGroupAssociations.Day.to_ulong() >> 4), true) |
+                this->interleave_bits(static_cast<uint8_t>(this->ZoneConfig.ZoneGroupAssociations.Night.to_ulong() >> 4), false));
+
+            buffer[7] |= 0b01000000; // Unknown bit set in all captured zoneconfig packets
+            break;
+
+        case PacketTypeEnum::ZoneFunction:
+            if (SourceType == AddressTypeEnum::IndoorUnit) {
+                setField(BMS.ZoneFunction.IndoorUnit.ZoneCommon, this->ZoneFunction.IndoorUnit.ZoneCommon);
+                setField(BMS.ZoneFunction.IndoorUnit.EnabledZones, this->ZoneFunction.IndoorUnit.EnabledZones.to_ulong());
+            } else
+                setField(BMS.ZoneFunction.Controller.Write, this->ZoneFunction.Controller.Write);
+
+            setField(BMS.ZoneFunction.Function, this->ZoneFunction.Function);
+            setField(BMS.ZoneFunction.Value, this->ZoneFunction.Value);
             break;
     }
 

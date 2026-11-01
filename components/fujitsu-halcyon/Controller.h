@@ -54,15 +54,18 @@ constexpr Features DefaultFeatures = {
     .EconomyMode = true,
     .HorizontalLouvers = false,
     .VerticalLouvers = false,
+    .Zones = false,
 };
 
 enum class InitializationStageEnum : uint8_t {
     DetectFeatureSupport,
     FeatureRequestTx,
     FeatureRequestRx,
+    ZoneRequestEnabled,
     FindNextControllerTx,
     FindNextControllerRx,
     WaitForPoll,
+    ZoneRequestActive,
     Complete
 };
 
@@ -84,10 +87,27 @@ namespace SettableFields {
     };
 };
 
+namespace ZoneSettableFields {
+    enum {
+        Zone1Active,
+        Zone2Active,
+        Zone3Active,
+        Zone4Active,
+        Zone5Active,
+        Zone6Active,
+        Zone7Active,
+        Zone8Active,
+        ZoneGroupDayActive,
+        ZoneGroupNightActive,
+        MAX
+    };
+};
+
 class Controller {
     using ConfigCallback = std::function<void(const Config&)>;
     using ErrorCallback  = std::function<void(const Packet&)>;
     using FunctionCallback = std::function<void(const Function&)>;
+    using ZoneConfigCallback = std::function<void(const ZoneConfig&)>;
     using ControllerConfigCallback = std::function<void(const uint8_t address, const Config&)>;
     using InitializationStageCallback = std::function<void(const InitializationStageEnum stage)>;
     using RxPktStatsCallback = std::function<void(const uint16_t total, const uint16_t invalid_type, const uint16_t* stats)>;
@@ -100,6 +120,7 @@ class Controller {
     struct Callbacks {
         ConfigCallback Config;
         ErrorCallback Error;
+        ZoneConfigCallback ZoneConfig;
         FunctionCallback Function;
         ControllerConfigCallback ControllerConfig;
         InitializationStageCallback InitializationStage;
@@ -131,6 +152,7 @@ class Controller {
         void reinitialize() { this->set_initialization_stage(InitializationStageEnum::DetectFeatureSupport); }
         InitializationStageEnum get_initialization_stage() const { return this->initialization_stage; }
         const struct Features& get_features() const { return this->features; }
+        const struct ZoneFunction::Zones& get_zones() const { return this->zones; }
 
         // Override the in-code DefaultFeatures with a user-supplied Features struct.
         // Used both as the initial fallback while probing and as the value applied
@@ -162,6 +184,10 @@ class Controller {
         bool set_tx_test(bool tx_test);
         bool reset_filter(bool ignore_lock = false);
         bool maintenance(bool ignore_lock = false);
+
+        bool set_zone(uint8_t zone, bool active, bool ignore_lock = false);
+        bool set_zone_group_day(bool active, bool ignore_lock = false);
+        bool set_zone_group_night(bool active, bool ignore_lock = false);
 
         void get_function(uint8_t function, uint8_t unit) { this->function_queue.push({ .Function = function, .Unit = unit }); }
         void set_function(uint8_t function, uint8_t value, uint8_t unit) { this->function_queue.push({ true, function, value, unit }); }
@@ -214,7 +240,13 @@ class Controller {
         struct Features features = DefaultFeatures;
         struct Config current_configuration = {};
         struct Config changed_configuration = {};
+        struct ZoneConfig current_zone_configuration = {};
+        struct ZoneConfig changed_zone_configuration = {};
+        struct ZoneFunction::Zones zones = {};
+
         std::bitset<SettableFields::MAX> configuration_changes;
+        std::bitset<ZoneSettableFields::MAX> zone_configuration_changes;
+
         std::queue<struct Function> function_queue;
         bool last_error_flag = false; // TODO handle errors for multiple indoor units...multiple errors per IU?
 
