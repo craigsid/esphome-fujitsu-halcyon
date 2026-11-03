@@ -626,12 +626,12 @@ void FujitsuHalcyonController::update_from_device(const fujitsu_general::airstag
     auto need_to_publish = false;
 
     // Error sensor (binary)
-    if (!this->error_sensor_->has_state())
+    if (this->error_sensor_ != nullptr && !this->error_sensor_->has_state())
         this->error_sensor_->publish_state(data.IndoorUnit.Error);
 
     // Error sensor (text)
-    if (!this->error_code_sensor_->has_state() && !data.IndoorUnit.Error)
-        this->error_code_sensor_->publish_state("None");
+    if (this->error_code_sensor_ != nullptr && !this->error_code_sensor_->has_state() && !data.IndoorUnit.Error)
+        	this->error_code_sensor_->publish_state("None");
 
     // Standby mode sensor
     // This can indicate defrosting, performing oil recovery, waiting for other units to complete....
