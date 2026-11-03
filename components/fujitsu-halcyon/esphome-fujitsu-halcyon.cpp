@@ -155,16 +155,22 @@ void FujitsuHalcyonController::setup() {
                 this->on_initialization_stage(stage);
             },
             .RxPktStats = [this](const uint16_t total, const uint16_t invalid_type, const uint16_t* stats){
-                this->rx_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d)", total, invalid_type,
-                    stats[0], stats[1], stats[2], stats[3], stats[4]));
+	    	if (this->rx_stats_sensor_ != nullptr) {
+                    this->rx_stats_sensor_->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d)", total, invalid_type,
+                    	stats[0], stats[1], stats[2], stats[3], stats[4]));
+		}
             },
             .ToMePktStats = [this](const uint16_t total, const uint16_t invalid_type, const uint16_t* stats){
-                this->to_me_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d)", total, invalid_type,
-                    stats[0], stats[1], stats[2], stats[3], stats[4]));
+	    	if (this->to_me_stats_sensor_ != nullptr) {
+                    this->to_me_stats_sensor_->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d)", total, invalid_type,
+                        stats[0], stats[1], stats[2], stats[3], stats[4]));
+		}
             },
             .TxPktStats = [this](const uint16_t total, const uint16_t invalid_type, const uint16_t* stats, const uint32_t tx_delay){
-                this->tx_stats_sensor->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d) %lu", total, invalid_type,
-                    stats[0], stats[1], stats[2], stats[3], stats[4], tx_delay));
+	    	if (this->tx_stats_sensor_ != nullptr) {
+                    this->tx_stats_sensor_->publish_state(str_sprintf("(%d/%d) (%d/%d/%d/%d/%d) %lu", total, invalid_type,
+                        stats[0], stats[1], stats[2], stats[3], stats[4], tx_delay));
+		}
             },
             .AvailableBytes = [this]() -> size_t {
                 return this->available();
@@ -625,7 +631,7 @@ void FujitsuHalcyonController::update_from_device(const fujitsu_general::airstag
 
     // Error sensor (text)
     if (!this->error_code_sensor_->has_state() && !data.IndoorUnit.Error)
-        this->error_code_sensor_->publish_state("");
+        this->error_code_sensor_->publish_state("None");
 
     // Standby mode sensor
     // This can indicate defrosting, performing oil recovery, waiting for other units to complete....

@@ -451,13 +451,13 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_initialization_sensor(s))
 
     s = await text_sensor.new_text_sensor(config[CONF_RX_STATS])
-    cg.add(var.set_initialization_sensor(s))
+    cg.add(var.set_rx_stats_sensor(s))
 
     s = await text_sensor.new_text_sensor(config[CONF_TO_ME_STATS])
-    cg.add(var.set_initialization_sensor(s))
+    cg.add(var.set_to_me_stats_sensor(s))
 
     s = await text_sensor.new_text_sensor(config[CONF_TX_STATS])
-    cg.add(var.set_initialization_sensor(s))
+    cg.add(var.set_tx_stats_sensor(s))
 
     # Always-present controls.
     b = await button.new_button(config[CONF_GET_FUNCTION])

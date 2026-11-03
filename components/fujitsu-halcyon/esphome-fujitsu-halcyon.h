@@ -34,12 +34,6 @@ class FujitsuHalcyonController : public Component, public climate::Climate, publ
         binary_sensor::BinarySensor* filter_sensor = new binary_sensor::BinarySensor();
         binary_sensor::BinarySensor* error_sensor = new binary_sensor::BinarySensor();
         binary_sensor::BinarySensor* connected_sensor = new binary_sensor::BinarySensor();
-        text_sensor::TextSensor* error_code_sensor = new text_sensor::TextSensor();
-        text_sensor::TextSensor* initialization_sensor = new text_sensor::TextSensor();
-        text_sensor::TextSensor* rx_stats_sensor = new text_sensor::TextSensor();
-        text_sensor::TextSensor* to_me_stats_sensor = new text_sensor::TextSensor();
-        text_sensor::TextSensor* tx_stats_sensor = new text_sensor::TextSensor();
-        text_sensor::TextSensor* supported_features_sensor = new text_sensor::TextSensor();
         sensor::Sensor* remote_sensor = new sensor::Sensor();
 
         // Called by the ReinitializeButton entity (created inline in python).
@@ -87,6 +81,9 @@ class FujitsuHalcyonController : public Component, public climate::Climate, publ
         void set_sensor_stale_sensor(binary_sensor::BinarySensor* s) { this->sensor_stale_sensor_ = s; }
         void set_error_code_sensor(text_sensor::TextSensor* s) { this->error_code_sensor_ = s; }
         void set_initialization_sensor(text_sensor::TextSensor* s) { this->initialization_sensor_ = s; }
+        void set_rx_stats_sensor(text_sensor::TextSensor* s) { this->rx_stats_sensor_ = s; }
+        void set_to_me_stats_sensor(text_sensor::TextSensor* s) { this->to_me_stats_sensor_ = s; }
+        void set_tx_stats_sensor(text_sensor::TextSensor* s) { this->tx_stats_sensor_ = s; }
         void set_supported_features_sensor(text_sensor::TextSensor* s) { this->supported_features_sensor_ = s; }
 
         // The function number entities and the get/set function buttons are created
@@ -204,6 +201,9 @@ class FujitsuHalcyonController : public Component, public climate::Climate, publ
         binary_sensor::BinarySensor* sensor_stale_sensor_{nullptr};
         text_sensor::TextSensor* error_code_sensor_{nullptr};
         text_sensor::TextSensor* initialization_sensor_{nullptr};
+        text_sensor::TextSensor* rx_stats_sensor_{nullptr};
+        text_sensor::TextSensor* to_me_stats_sensor_{nullptr};
+        text_sensor::TextSensor* tx_stats_sensor_{nullptr};
         text_sensor::TextSensor* supported_features_sensor_{nullptr};
         number::Number* function_number_{nullptr};
         number::Number* function_value_number_{nullptr};
