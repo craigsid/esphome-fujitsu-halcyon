@@ -32,7 +32,8 @@ static constexpr std::array<const char*, 9> STAGE_LABELS = {
     "Waiting for features", // FeatureRequestRx
     "Requesting zones",     // ZoneRequestEnabled
     "Finding controllers",  // FindNextControllerTx
-    "Finding controllers",  // FindNextControllerRx
+    "Finding controllers Rx",  // FindNextControllerRx
+    "Waiting for poll",     // WaitForPoll
     "Reading zones",        // ZoneRequestActive
     "Complete",             // Complete
 };
